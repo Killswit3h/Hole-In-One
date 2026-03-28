@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # suppress Node.js 20 deprecation warning
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
@@ -34,34 +34,40 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Print Flutter version
+      - name: Print Flutter & Dart versions
         run: flutter --version
 
-      # flutter create normally generates gradlew + gradle/wrapper/.
-      # Since this project was built manually those files are absent.
-      # We spin up a throwaway Flutter project just to steal the wrapper,
-      # then discard it.  Nothing else in our project is touched.
-      - name: Bootstrap Gradle wrapper from flutter create
+      # This project was hand-crafted, so it lacks the files that
+      # `flutter create` normally generates:
+      #   - android/gradlew          (Gradle entry-point script)
+      #   - android/gradle/wrapper/  (gradle-wrapper.jar + .properties)
+      #   - android/settings.gradle  (contains AGP / Kotlin version numbers)
+      #   - android/build.gradle     (top-level; references those versions)
+      #
+      # We bootstrap a throwaway project with the exact same Flutter version
+      # that is running in this job, copy the infrastructure files from it,
+      # then discard it.  Only android/app/build.gradle (our custom config)
+      # is kept from the repo.
+      - name: Bootstrap Gradle infrastructure from flutter create
         run: |
           flutter create \
             --org com.placeholder \
-            --project-name placeholder_app \
+            --project-name golf_swing_analyzer \
             --platforms android \
             /tmp/flutter_base
 
-          # Copy gradlew script (the entry point Gradle needs)
-          if [ ! -f android/gradlew ]; then
-            cp /tmp/flutter_base/android/gradlew android/gradlew
-            chmod +x android/gradlew
-          fi
+          # Gradle wrapper script (required to invoke Gradle)
+          cp /tmp/flutter_base/android/gradlew android/gradlew
+          chmod +x android/gradlew
 
-          # Copy gradle/wrapper/ directory (contains gradle-wrapper.jar + .properties)
-          # -n = no-clobber: never overwrite our own gradle-wrapper.properties
-          if [ ! -d android/gradle/wrapper ]; then
-            mkdir -p android/gradle/wrapper
-          fi
-          cp -n /tmp/flutter_base/android/gradle/wrapper/gradle-wrapper.jar \
-                android/gradle/wrapper/gradle-wrapper.jar || true
+          # Gradle wrapper directory (gradle-wrapper.jar + gradle-wrapper.properties)
+          cp -r /tmp/flutter_base/android/gradle android/
+
+          # Top-level Gradle config — contains the AGP and Kotlin version numbers
+          # that are compatible with THIS Flutter release.  Safe to copy verbatim
+          # because they contain no app-specific code.
+          cp /tmp/flutter_base/android/settings.gradle android/settings.gradle
+          cp /tmp/flutter_base/android/build.gradle android/build.gradle
 
           rm -rf /tmp/flutter_base
 
