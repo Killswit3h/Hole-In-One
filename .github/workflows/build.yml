@@ -1,0 +1,116 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main
+      - 'claude/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    name: Build Debug & Release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Flutter (latest stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Print Flutter & Dart versions
+        run: flutter --version
+
+      # This project was hand-crafted, so it lacks the files that
+      # `flutter create` normally generates:
+      #   - android/gradlew              (Gradle entry-point script)
+      #   - android/gradle/wrapper/      (gradle-wrapper.jar + .properties)
+      #   - android/settings.gradle(.kts) (AGP / Kotlin version numbers)
+      #   - android/build.gradle(.kts)    (top-level; references those versions)
+      #
+      # We bootstrap a throwaway project with the exact same Flutter version
+      # that is running in this job, copy the infrastructure files from it,
+      # then discard it.  Only android/app/build.gradle (our custom config)
+      # is kept from the repo.
+      #
+      # NOTE: Flutter 3.22+ uses Groovy DSL (.gradle); later versions may
+      # switch to Kotlin DSL (.gradle.kts).  We copy whichever exists.
+      - name: Bootstrap Gradle infrastructure from flutter create
+        run: |
+          # --no-pub skips pub get for the throwaway project (faster)
+          flutter create \
+            --org com.placeholder \
+            --project-name placeholder_app \
+            --platforms android \
+            --no-pub \
+            /tmp/flutter_base
+
+          echo "=== flutter create android output ==="
+          find /tmp/flutter_base/android -maxdepth 3 -type f | sort
+
+          # Gradle wrapper script
+          cp /tmp/flutter_base/android/gradlew android/gradlew
+          chmod +x android/gradlew
+
+          # Gradle wrapper directory (gradle-wrapper.jar + gradle-wrapper.properties)
+          cp -r /tmp/flutter_base/android/gradle android/
+
+          # Top-level Gradle config files.
+          # Copy whichever format (Groovy .gradle or Kotlin DSL .gradle.kts) exists.
+          # These contain only version numbers — no app-specific code.
+          for f in settings.gradle settings.gradle.kts build.gradle build.gradle.kts; do
+            src="/tmp/flutter_base/android/$f"
+            [ -f "$src" ] && cp "$src" "android/$f" && echo "Copied android/$f"
+          done
+
+          # Remove any stale format files that the bootstrap didn't produce
+          # (e.g. if new Flutter uses .kts, remove our repo's .gradle and vice-versa)
+          [ ! -f /tmp/flutter_base/android/settings.gradle ]     && rm -f android/settings.gradle
+          [ ! -f /tmp/flutter_base/android/settings.gradle.kts ] && rm -f android/settings.gradle.kts
+          [ ! -f /tmp/flutter_base/android/build.gradle ]        && rm -f android/build.gradle
+          [ ! -f /tmp/flutter_base/android/build.gradle.kts ]    && rm -f android/build.gradle.kts
+
+          rm -rf /tmp/flutter_base
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze code
+        run: flutter analyze --no-fatal-infos
+        continue-on-error: true
+
+      - name: Build debug APK
+        run: flutter build apk --debug
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: golf-swing-analyzer-debug
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          retention-days: 30
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: golf-swing-analyzer-release
+          path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30
