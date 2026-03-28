@@ -11,16 +11,17 @@ class PermissionService {
     return status.isGranted;
   }
 
+  /// Returns true if camera permission is granted (mic is optional).
   static Future<bool> requestAll() async {
     final results = await [
       Permission.camera,
       Permission.microphone,
     ].request();
-
-    final cameraGranted = results[Permission.camera]?.isGranted ?? false;
-    final micGranted = results[Permission.microphone]?.isGranted ?? false;
-    return cameraGranted && micGranted;
+    return results[Permission.camera]?.isGranted ?? false;
   }
+
+  static Future<bool> isMicrophoneGranted() async =>
+      await Permission.microphone.isGranted;
 
   static Future<bool> isCameraGranted() async =>
       await Permission.camera.isGranted;

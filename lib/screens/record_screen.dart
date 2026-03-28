@@ -68,13 +68,29 @@ class _RecordScreenState extends State<RecordScreen>
   }
 
   Future<void> _initCamera() async {
-    final granted = await PermissionService.requestAll();
-    if (!granted) {
+    setState(() {
+      _permissionDenied = false;
+      _errorMessage = null;
+      _isInitialized = false;
+    });
+
+    final cameraGranted = await PermissionService.requestAll();
+    if (!cameraGranted) {
       if (mounted) setState(() => _permissionDenied = true);
       return;
     }
 
-    final cameras = await availableCameras();
+    // Microphone is optional — video records without audio if denied
+    final micGranted = await PermissionService.isMicrophoneGranted();
+
+    List<CameraDescription> cameras;
+    try {
+      cameras = await availableCameras();
+    } catch (e) {
+      if (mounted) setState(() => _errorMessage = 'Could not list cameras: $e');
+      return;
+    }
+
     if (cameras.isEmpty) {
       if (mounted) setState(() => _errorMessage = 'No cameras found on device.');
       return;
@@ -89,7 +105,7 @@ class _RecordScreenState extends State<RecordScreen>
     final controller = CameraController(
       camera,
       ResolutionPreset.high,
-      enableAudio: true,
+      enableAudio: micGranted,
       imageFormatGroup: ImageFormatGroup.nv21,
     );
 
@@ -109,10 +125,20 @@ class _RecordScreenState extends State<RecordScreen>
     final controller = _controller;
     if (controller == null || !controller.value.isInitialized) return;
 
-    if (_isRecording) {
-      await _stopRecording(controller);
-    } else {
-      await _startRecording(controller);
+    try {
+      if (_isRecording) {
+        await _stopRecording(controller);
+      } else {
+        await _startRecording(controller);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+          _isRecording = false;
+          _errorMessage = 'Recording error: $e';
+        });
+      }
     }
   }
 
@@ -121,13 +147,20 @@ class _RecordScreenState extends State<RecordScreen>
     _recordingStart = DateTime.now();
 
     await controller.startVideoRecording();
-    await controller.startImageStream(_processCameraImage);
 
-    setState(() => _isRecording = true);
+    // Start pose detection stream — non-fatal if it fails
+    try {
+      await controller.startImageStream(_processCameraImage);
+    } catch (e) {
+      // Continue recording video even without pose detection
+      debugPrint('Image stream unavailable: $e');
+    }
+
+    if (mounted) setState(() => _isRecording = true);
   }
 
   Future<void> _stopRecording(CameraController controller) async {
-    setState(() => _isSaving = true);
+    if (mounted) setState(() => _isSaving = true);
 
     try {
       // Stop image stream before stopping video
@@ -203,6 +236,8 @@ class _RecordScreenState extends State<RecordScreen>
           landmarks: landmarks,
         ));
       }
+    } catch (e) {
+      debugPrint('Pose detection error: $e');
     } finally {
       _isDetecting = false;
     }
@@ -213,7 +248,6 @@ class _RecordScreenState extends State<RecordScreen>
     if (controller == null) return null;
 
     // Concatenate all plane bytes (NV21 format on Android).
-    // Uses only dart:typed_data — avoids dart:ui WriteBuffer import.
     final bytes = Uint8List.fromList(
       image.planes.expand((plane) => plane.bytes).toList(),
     );
@@ -314,7 +348,7 @@ class _RecordScreenState extends State<RecordScreen>
               size: 64, color: AppTheme.textSecondary),
           const SizedBox(height: 16),
           const Text(
-            'Camera & Microphone\nPermissions Required',
+            'Camera Permission Required',
             textAlign: TextAlign.center,
             style: TextStyle(color: Colors.white, fontSize: 18),
           ),
@@ -340,6 +374,11 @@ class _RecordScreenState extends State<RecordScreen>
             _errorMessage!,
             textAlign: TextAlign.center,
             style: const TextStyle(color: Colors.white),
+          ),
+          const SizedBox(height: 24),
+          ElevatedButton(
+            onPressed: _initCamera,
+            child: const Text('Retry'),
           ),
         ],
       ),
@@ -431,7 +470,7 @@ class _RecordScreenState extends State<RecordScreen>
 
         // Record button
         GestureDetector(
-          onTap: _isInitialized ? _toggleRecording : null,
+          onTap: _isInitialized && !_isSaving ? _toggleRecording : null,
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 200),
             width: 76,
@@ -440,7 +479,7 @@ class _RecordScreenState extends State<RecordScreen>
               shape: _isRecording ? BoxShape.rectangle : BoxShape.circle,
               borderRadius:
                   _isRecording ? BorderRadius.circular(12) : null,
-              color: _isRecording ? Colors.red : Colors.red,
+              color: _isInitialized ? Colors.red : Colors.red.withOpacity(0.4),
               border: Border.all(color: Colors.white, width: 3),
             ),
             child: Icon(
