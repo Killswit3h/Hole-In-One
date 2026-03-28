@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
 import '../models/pose_frame.dart';
-import '../models/pose_landmark.dart';
+import '../models/pose_landmark.dart' as models;
 import '../services/permission_service.dart';
 import '../services/storage_service.dart';
 import '../theme/app_theme.dart';
@@ -190,7 +190,7 @@ class _RecordScreenState extends State<RecordScreen>
         final elapsed =
             DateTime.now().difference(_recordingStart!).inMilliseconds;
         final landmarks = poses.first.landmarks.entries.map((entry) {
-          return PoseLandmark(
+          return models.PoseLandmark(
             type: entry.key.name,
             x: (entry.value.x / image.width).clamp(0.0, 1.0),
             y: (entry.value.y / image.height).clamp(0.0, 1.0),
@@ -212,12 +212,11 @@ class _RecordScreenState extends State<RecordScreen>
     final controller = _controller;
     if (controller == null) return null;
 
-    // Concatenate all plane bytes (NV21 format on Android)
-    final WriteBuffer allBytes = WriteBuffer();
-    for (final plane in image.planes) {
-      allBytes.putUint8List(plane.bytes);
-    }
-    final bytes = allBytes.done().buffer.asUint8List();
+    // Concatenate all plane bytes (NV21 format on Android).
+    // Uses only dart:typed_data — avoids dart:ui WriteBuffer import.
+    final bytes = Uint8List.fromList(
+      image.planes.expand((plane) => plane.bytes).toList(),
+    );
 
     final metadata = InputImageMetadata(
       size: Size(image.width.toDouble(), image.height.toDouble()),
