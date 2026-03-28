@@ -6,9 +6,13 @@ if (localPropertiesFile.exists()) {
     }
 }
 
-def flutterRoot = localProperties.getProperty('flutter.sdk')
+// Flutter CLI writes flutter.sdk into local.properties; fall back to FLUTTER_ROOT env var for CI.
+def flutterRoot = localProperties.getProperty('flutter.sdk') ?: System.getenv("FLUTTER_ROOT")
 if (flutterRoot == null) {
-    throw new GradleException("Flutter SDK not found. Define location with flutter.sdk in the local.properties file.")
+    throw new GradleException(
+        "Flutter SDK not found. Set flutter.sdk in android/local.properties " +
+        "or the FLUTTER_ROOT environment variable."
+    )
 }
 
 def flutterVersionCode = localProperties.getProperty('flutter.versionCode')

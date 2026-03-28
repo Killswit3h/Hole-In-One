@@ -8,7 +8,10 @@ on:
   pull_request:
     branches:
       - main
-  workflow_dispatch:  # allows manual trigger from GitHub Actions tab
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # suppress Node.js 20 deprecation warning
 
 jobs:
   build:
@@ -25,12 +28,42 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Set up Flutter
+      - name: Set up Flutter (latest stable)
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.0'
           channel: 'stable'
           cache: true
+
+      - name: Print Flutter version
+        run: flutter --version
+
+      # flutter create normally generates gradlew + gradle/wrapper/.
+      # Since this project was built manually those files are absent.
+      # We spin up a throwaway Flutter project just to steal the wrapper,
+      # then discard it.  Nothing else in our project is touched.
+      - name: Bootstrap Gradle wrapper from flutter create
+        run: |
+          flutter create \
+            --org com.placeholder \
+            --project-name placeholder_app \
+            --platforms android \
+            /tmp/flutter_base
+
+          # Copy gradlew script (the entry point Gradle needs)
+          if [ ! -f android/gradlew ]; then
+            cp /tmp/flutter_base/android/gradlew android/gradlew
+            chmod +x android/gradlew
+          fi
+
+          # Copy gradle/wrapper/ directory (contains gradle-wrapper.jar + .properties)
+          # -n = no-clobber: never overwrite our own gradle-wrapper.properties
+          if [ ! -d android/gradle/wrapper ]; then
+            mkdir -p android/gradle/wrapper
+          fi
+          cp -n /tmp/flutter_base/android/gradle/wrapper/gradle-wrapper.jar \
+                android/gradle/wrapper/gradle-wrapper.jar || true
+
+          rm -rf /tmp/flutter_base
 
       - name: Install dependencies
         run: flutter pub get
