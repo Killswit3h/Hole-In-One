@@ -7,13 +7,18 @@ import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
 import '../models/pose_frame.dart';
 import '../models/pose_landmark.dart' as models;
+import '../models/swing_analysis_result.dart';
 import '../services/permission_service.dart';
 import '../services/storage_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/camera_guide_painter.dart';
+import '../widgets/skeleton_painter.dart';
 import 'analysis_screen.dart';
 
 class RecordScreen extends StatefulWidget {
-  const RecordScreen({super.key});
+  final SwingAngle angle;
+
+  const RecordScreen({super.key, required this.angle});
 
   @override
   State<RecordScreen> createState() => _RecordScreenState();
@@ -31,6 +36,9 @@ class _RecordScreenState extends State<RecordScreen>
 
   DateTime? _recordingStart;
   final List<PoseFrame> _poseFrames = [];
+
+  /// Latest detected frame — shown as live skeleton overlay during recording.
+  PoseFrame? _latestFrame;
 
   late final PoseDetector _poseDetector;
 
@@ -59,7 +67,6 @@ class _RecordScreenState extends State<RecordScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final controller = _controller;
     if (controller == null || !controller.value.isInitialized) return;
-
     if (state == AppLifecycleState.inactive) {
       controller.dispose();
     } else if (state == AppLifecycleState.resumed) {
@@ -80,7 +87,6 @@ class _RecordScreenState extends State<RecordScreen>
       return;
     }
 
-    // Microphone is optional — video records without audio if denied
     final micGranted = await PermissionService.isMicrophoneGranted();
 
     List<CameraDescription> cameras;
@@ -96,7 +102,6 @@ class _RecordScreenState extends State<RecordScreen>
       return;
     }
 
-    // Prefer back camera
     final camera = cameras.firstWhere(
       (c) => c.lensDirection == CameraLensDirection.back,
       orElse: () => cameras.first,
@@ -144,15 +149,14 @@ class _RecordScreenState extends State<RecordScreen>
 
   Future<void> _startRecording(CameraController controller) async {
     _poseFrames.clear();
+    _latestFrame = null;
     _recordingStart = DateTime.now();
 
     await controller.startVideoRecording();
 
-    // Start pose detection stream — non-fatal if it fails
     try {
       await controller.startImageStream(_processCameraImage);
     } catch (e) {
-      // Continue recording video even without pose detection
       debugPrint('Image stream unavailable: $e');
     }
 
@@ -163,27 +167,18 @@ class _RecordScreenState extends State<RecordScreen>
     if (mounted) setState(() => _isSaving = true);
 
     try {
-      // Stop image stream before stopping video
       if (controller.value.isStreamingImages) {
         await controller.stopImageStream();
       }
       final xfile = await controller.stopVideoRecording();
 
-      // Generate a unique ID from timestamp
       final id = DateTime.now().millisecondsSinceEpoch.toString();
-
-      // Allocate permanent storage paths
       final paths = await StorageService.allocateRecordingPaths(id);
-
-      // Copy temp video to permanent location
       await File(xfile.path).copy(paths.videoPath);
 
-      // Calculate duration from pose frame timestamps
-      final durationMs = _poseFrames.isNotEmpty
-          ? _poseFrames.last.timestampMs
-          : 0;
+      final durationMs =
+          _poseFrames.isNotEmpty ? _poseFrames.last.timestampMs : 0;
 
-      // Save recording (writes poses.json + updates index)
       final recording = await StorageService.saveRecording(
         id: id,
         videoPath: paths.videoPath,
@@ -231,10 +226,11 @@ class _RecordScreenState extends State<RecordScreen>
           );
         }).toList();
 
-        _poseFrames.add(PoseFrame(
-          timestampMs: elapsed,
-          landmarks: landmarks,
-        ));
+        final frame = PoseFrame(timestampMs: elapsed, landmarks: landmarks);
+        _poseFrames.add(frame);
+
+        // Update live skeleton
+        if (mounted) setState(() => _latestFrame = frame);
       }
     } catch (e) {
       debugPrint('Pose detection error: $e');
@@ -244,21 +240,16 @@ class _RecordScreenState extends State<RecordScreen>
   }
 
   InputImage? _buildInputImage(CameraImage image) {
-    final controller = _controller;
-    if (controller == null) return null;
-
-    // Concatenate all plane bytes (NV21 format on Android).
+    if (_controller == null) return null;
     final bytes = Uint8List.fromList(
-      image.planes.expand((plane) => plane.bytes).toList(),
+      image.planes.expand((p) => p.bytes).toList(),
     );
-
     final metadata = InputImageMetadata(
       size: Size(image.width.toDouble(), image.height.toDouble()),
       rotation: InputImageRotation.rotation90deg,
       format: InputImageFormat.nv21,
       bytesPerRow: image.planes[0].bytesPerRow,
     );
-
     return InputImage.fromBytes(bytes: bytes, metadata: metadata);
   }
 
@@ -269,40 +260,27 @@ class _RecordScreenState extends State<RecordScreen>
       body: SafeArea(
         child: Stack(
           children: [
-            // Camera preview or error state
             if (_isInitialized && _controller != null)
               _buildCameraPreview()
             else
               _buildPlaceholder(),
 
-            // Top bar
             Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
+              top: 0, left: 0, right: 0,
               child: _buildTopBar(),
             ),
 
-            // Recording indicator
             if (_isRecording)
               Positioned(
-                top: 64,
-                left: 0,
-                right: 0,
-                child: Center(
-                  child: _buildRecordingIndicator(),
-                ),
+                top: 64, left: 0, right: 0,
+                child: Center(child: _buildRecordingIndicator()),
               ),
 
-            // Bottom controls
             Positioned(
-              bottom: 32,
-              left: 0,
-              right: 0,
+              bottom: 32, left: 0, right: 0,
               child: _buildBottomControls(),
             ),
 
-            // Saving overlay
             if (_isSaving) _buildSavingOverlay(),
           ],
         ),
@@ -311,14 +289,31 @@ class _RecordScreenState extends State<RecordScreen>
   }
 
   Widget _buildCameraPreview() {
+    final controller = _controller!;
     return SizedBox.expand(
-      child: FittedBox(
-        fit: BoxFit.cover,
-        child: SizedBox(
-          width: _controller!.value.previewSize!.height,
-          height: _controller!.value.previewSize!.width,
-          child: CameraPreview(_controller!),
-        ),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          // Camera feed
+          FittedBox(
+            fit: BoxFit.cover,
+            child: SizedBox(
+              width: controller.value.previewSize!.height,
+              height: controller.value.previewSize!.width,
+              child: CameraPreview(controller),
+            ),
+          ),
+
+          // Guide overlay (before recording)
+          if (!_isRecording)
+            CustomPaint(painter: CameraGuidePainter(angle: widget.angle)),
+
+          // Live skeleton (while recording)
+          if (_isRecording && _latestFrame != null)
+            CustomPaint(
+              painter: SkeletonPainter(frame: _latestFrame),
+            ),
+        ],
       ),
     );
   }
@@ -331,9 +326,7 @@ class _RecordScreenState extends State<RecordScreen>
             ? _buildPermissionDenied()
             : _errorMessage != null
                 ? _buildError()
-                : const CircularProgressIndicator(
-                    color: AppTheme.primaryGreen,
-                  ),
+                : const CircularProgressIndicator(color: AppTheme.primaryGreen),
       ),
     );
   }
@@ -344,8 +337,7 @@ class _RecordScreenState extends State<RecordScreen>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.no_photography,
-              size: 64, color: AppTheme.textSecondary),
+          const Icon(Icons.no_photography, size: 64, color: AppTheme.textSecondary),
           const SizedBox(height: 16),
           const Text(
             'Camera Permission Required',
@@ -354,7 +346,7 @@ class _RecordScreenState extends State<RecordScreen>
           ),
           const SizedBox(height: 24),
           ElevatedButton(
-            onPressed: () => PermissionService.openSettings(),
+            onPressed: PermissionService.openSettings,
             child: const Text('Open Settings'),
           ),
         ],
@@ -376,10 +368,7 @@ class _RecordScreenState extends State<RecordScreen>
             style: const TextStyle(color: Colors.white),
           ),
           const SizedBox(height: 24),
-          ElevatedButton(
-            onPressed: _initCamera,
-            child: const Text('Retry'),
-          ),
+          ElevatedButton(onPressed: _initCamera, child: const Text('Retry')),
         ],
       ),
     );
@@ -401,18 +390,35 @@ class _RecordScreenState extends State<RecordScreen>
             icon: const Icon(Icons.arrow_back, color: Colors.white),
             onPressed: _isRecording ? null : () => Navigator.pop(context),
           ),
-          const Expanded(
+          Expanded(
             child: Text(
-              'Record Swing',
+              _isRecording ? 'Recording…' : 'Record Swing',
               textAlign: TextAlign.center,
-              style: TextStyle(
+              style: const TextStyle(
                 color: Colors.white,
                 fontSize: 17,
                 fontWeight: FontWeight.w600,
               ),
             ),
           ),
-          const SizedBox(width: 48), // balance back button
+          // Angle badge
+          Container(
+            margin: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: AppTheme.primaryGreen.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppTheme.primaryGreen.withOpacity(0.5)),
+            ),
+            child: Text(
+              widget.angle == SwingAngle.faceOn ? 'Face-On' : 'DTL',
+              style: const TextStyle(
+                color: AppTheme.primaryGreen,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -420,7 +426,7 @@ class _RecordScreenState extends State<RecordScreen>
 
   Widget _buildRecordingIndicator() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
       decoration: BoxDecoration(
         color: Colors.red.withOpacity(0.85),
         borderRadius: BorderRadius.circular(20),
@@ -429,21 +435,20 @@ class _RecordScreenState extends State<RecordScreen>
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 8,
-            height: 8,
+            width: 8, height: 8,
             decoration: const BoxDecoration(
               shape: BoxShape.circle,
               color: Colors.white,
             ),
           ),
           const SizedBox(width: 8),
-          const Text(
-            'RECORDING',
-            style: TextStyle(
+          Text(
+            'REC  ${_poseFrames.length} frames',
+            style: const TextStyle(
               color: Colors.white,
               fontSize: 13,
               fontWeight: FontWeight.bold,
-              letterSpacing: 1.2,
+              letterSpacing: 1.0,
             ),
           ),
         ],
@@ -455,19 +460,6 @@ class _RecordScreenState extends State<RecordScreen>
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Pose detection hint
-        if (_isRecording)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 16),
-            child: Text(
-              'Detecting pose: ${_poseFrames.length} frames',
-              style: const TextStyle(
-                color: AppTheme.accentGreen,
-                fontSize: 13,
-              ),
-            ),
-          ),
-
         // Record button
         GestureDetector(
           onTap: _isInitialized && !_isSaving ? _toggleRecording : null,
@@ -477,8 +469,7 @@ class _RecordScreenState extends State<RecordScreen>
             height: 76,
             decoration: BoxDecoration(
               shape: _isRecording ? BoxShape.rectangle : BoxShape.circle,
-              borderRadius:
-                  _isRecording ? BorderRadius.circular(12) : null,
+              borderRadius: _isRecording ? BorderRadius.circular(14) : null,
               color: _isInitialized ? Colors.red : Colors.red.withOpacity(0.4),
               border: Border.all(color: Colors.white, width: 3),
             ),
@@ -489,13 +480,10 @@ class _RecordScreenState extends State<RecordScreen>
             ),
           ),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         Text(
-          _isRecording ? 'Tap to stop' : 'Tap to record',
-          style: const TextStyle(
-            color: Colors.white70,
-            fontSize: 13,
-          ),
+          _isRecording ? 'Tap to stop & analyze' : 'Tap to start recording',
+          style: const TextStyle(color: Colors.white70, fontSize: 13),
         ),
       ],
     );
@@ -511,8 +499,13 @@ class _RecordScreenState extends State<RecordScreen>
             CircularProgressIndicator(color: AppTheme.primaryGreen),
             SizedBox(height: 20),
             Text(
-              'Saving & analyzing swing...',
+              'Analyzing your swing…',
               style: TextStyle(color: Colors.white, fontSize: 16),
+            ),
+            SizedBox(height: 8),
+            Text(
+              'Detecting faults & calculating score',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
           ],
         ),

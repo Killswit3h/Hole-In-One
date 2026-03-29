@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
+import 'angle_select_screen.dart';
 import 'past_swings_screen.dart';
-import 'record_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -75,7 +75,7 @@ class HomeScreen extends StatelessWidget {
                     onPressed: () => Navigator.push(
                       context,
                       MaterialPageRoute(
-                          builder: (_) => const RecordScreen()),
+                          builder: (_) => const AngleSelectScreen()),
                     ),
                     icon: const Icon(Icons.videocam, size: 22),
                     label: const Text('Record Swing'),
