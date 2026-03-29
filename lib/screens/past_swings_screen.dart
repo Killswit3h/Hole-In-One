@@ -4,7 +4,7 @@ import '../models/swing_recording.dart';
 import '../services/storage_service.dart';
 import '../theme/app_theme.dart';
 import 'analysis_screen.dart';
-import 'record_screen.dart';
+import 'angle_select_screen.dart';
 
 class PastSwingsScreen extends StatefulWidget {
   const PastSwingsScreen({super.key});
@@ -152,7 +152,7 @@ class _PastSwingsScreenState extends State<PastSwingsScreen> {
             ElevatedButton.icon(
               onPressed: () => Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => const RecordScreen()),
+                MaterialPageRoute(builder: (_) => const AngleSelectScreen()),
               ),
               icon: const Icon(Icons.videocam),
               label: const Text('Record Swing'),
