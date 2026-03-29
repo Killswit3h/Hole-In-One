@@ -27,6 +27,7 @@ class RecordScreen extends StatefulWidget {
 class _RecordScreenState extends State<RecordScreen>
     with WidgetsBindingObserver {
   CameraController? _controller;
+  CameraDescription? _selectedCamera; // stored to get sensor orientation
   bool _isInitialized = false;
   bool _isRecording = false;
   bool _isSaving = false;
@@ -106,6 +107,7 @@ class _RecordScreenState extends State<RecordScreen>
       (c) => c.lensDirection == CameraLensDirection.back,
       orElse: () => cameras.first,
     );
+    _selectedCamera = camera;
 
     final controller = CameraController(
       camera,
@@ -150,15 +152,18 @@ class _RecordScreenState extends State<RecordScreen>
   Future<void> _startRecording(CameraController controller) async {
     _poseFrames.clear();
     _latestFrame = null;
-    _recordingStart = DateTime.now();
 
-    await controller.startVideoRecording();
-
+    // Start image stream BEFORE video recording.
+    // On Android, calling startVideoRecording first can lock out the image
+    // analysis pipeline, resulting in 0 pose frames captured.
     try {
       await controller.startImageStream(_processCameraImage);
     } catch (e) {
       debugPrint('Image stream unavailable: $e');
     }
+
+    _recordingStart = DateTime.now();
+    await controller.startVideoRecording();
 
     if (mounted) setState(() => _isRecording = true);
   }
@@ -167,6 +172,7 @@ class _RecordScreenState extends State<RecordScreen>
     if (mounted) setState(() => _isSaving = true);
 
     try {
+      // Stop stream first so the last few frames don't race with video stop
       if (controller.value.isStreamingImages) {
         await controller.stopImageStream();
       }
@@ -241,16 +247,34 @@ class _RecordScreenState extends State<RecordScreen>
 
   InputImage? _buildInputImage(CameraImage image) {
     if (_controller == null) return null;
+
+    // Flatten all plane bytes into a single NV21 buffer.
+    // For Android NV21: plane[0]=Y, plane[1]=UV interleaved — concatenation works.
     final bytes = Uint8List.fromList(
       image.planes.expand((p) => p.bytes).toList(),
     );
+
+    // Use the actual camera sensor orientation so ML Kit gets the right body
+    // orientation — wrong rotation = no poses detected.
+    final rotation = _sensorRotation(_selectedCamera?.sensorOrientation ?? 90);
+
     final metadata = InputImageMetadata(
       size: Size(image.width.toDouble(), image.height.toDouble()),
-      rotation: InputImageRotation.rotation90deg,
+      rotation: rotation,
       format: InputImageFormat.nv21,
       bytesPerRow: image.planes[0].bytesPerRow,
     );
     return InputImage.fromBytes(bytes: bytes, metadata: metadata);
+  }
+
+  InputImageRotation _sensorRotation(int sensorDegrees) {
+    switch (sensorDegrees) {
+      case 0:   return InputImageRotation.rotation0deg;
+      case 90:  return InputImageRotation.rotation90deg;
+      case 180: return InputImageRotation.rotation180deg;
+      case 270: return InputImageRotation.rotation270deg;
+      default:  return InputImageRotation.rotation90deg;
+    }
   }
 
   @override

@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 
 import '../models/swing_analysis_result.dart';
 
-/// Draws camera alignment guides on the live camera preview
-/// so the user knows exactly where to stand.
+/// Draws camera alignment guides on the live camera preview.
+/// Proportioned to avoid overlapping the AppBar (~15% top) or record button (~25% bottom).
 class CameraGuidePainter extends CustomPainter {
   final SwingAngle angle;
 
@@ -16,170 +16,135 @@ class CameraGuidePainter extends CustomPainter {
     final w = size.width;
     final h = size.height;
 
-    final linePaint = Paint()
-      ..color = Colors.white.withOpacity(0.35)
-      ..strokeWidth = 1.5
+    final gridPaint = Paint()
+      ..color = Colors.white.withOpacity(0.15)
+      ..strokeWidth = 1.0
       ..style = PaintingStyle.stroke;
 
-    final accentPaint = Paint()
-      ..color = const Color(0xFF4CAF50).withOpacity(0.6)
+    final guidePaint = Paint()
+      ..color = const Color(0xFF4CAF50).withOpacity(0.55)
+      ..strokeWidth = 1.8
+      ..style = PaintingStyle.stroke;
+
+    final silhouettePaint = Paint()
+      ..color = const Color(0xFF4CAF50).withOpacity(0.45)
       ..strokeWidth = 2.0
+      ..strokeCap = StrokeCap.round
       ..style = PaintingStyle.stroke;
 
-    // ── Thirds grid (faint) ──────────────────────────────────────────────────
-    for (final frac in [1 / 3, 2 / 3]) {
-      canvas.drawLine(
-        Offset(w * frac, 0),
-        Offset(w * frac, h),
-        linePaint,
-      );
-      canvas.drawLine(
-        Offset(0, h * frac),
-        Offset(w, h * frac),
-        linePaint,
-      );
+    // ── Thirds grid ───────────────────────────────────────────────────────────
+    for (final f in [1 / 3, 2 / 3]) {
+      canvas.drawLine(Offset(w * f, 0), Offset(w * f, h), gridPaint);
+      canvas.drawLine(Offset(0, h * f), Offset(w, h * f), gridPaint);
     }
 
-    // ── Centre vertical guide ────────────────────────────────────────────────
-    _drawDashedLine(
-      canvas,
-      Offset(w * 0.5, h * 0.04),
-      Offset(w * 0.5, h * 0.96),
-      accentPaint,
-    );
+    // ── Vertical centre line (dashed) ─────────────────────────────────────────
+    _dash(canvas, Offset(w * 0.5, h * 0.14), Offset(w * 0.5, h * 0.78), guidePaint);
 
-    // ── Hip-height horizontal guide ──────────────────────────────────────────
-    _drawDashedLine(
-      canvas,
-      Offset(w * 0.15, h * 0.62),
-      Offset(w * 0.85, h * 0.62),
-      accentPaint,
-    );
+    // ── Hip-level horizontal line (dashed) ────────────────────────────────────
+    // Positioned at h*0.50 to align with the silhouette's hip joint
+    _dash(canvas, Offset(w * 0.12, h * 0.50), Offset(w * 0.88, h * 0.50), guidePaint);
 
-    // ── Stick-figure body silhouette ─────────────────────────────────────────
-    _drawSilhouette(canvas, size, accentPaint);
+    // "Hip level" label
+    _text(canvas, 'Hip level', Offset(w * 0.89, h * 0.49),
+        Colors.white.withOpacity(0.55), 10, align: TextAlign.left);
 
-    // ── Corner labels ────────────────────────────────────────────────────────
-    _drawLabel(
-      canvas,
-      angle == SwingAngle.faceOn ? 'FACE-ON VIEW' : 'DOWN-THE-LINE VIEW',
-      Offset(w / 2, h * 0.04),
-      const Color(0xFF4CAF50),
-      13,
-    );
-
-    _drawLabel(
-      canvas,
-      'Hip level',
-      Offset(w * 0.87, h * 0.60),
-      Colors.white.withOpacity(0.6),
-      10,
-    );
-
-    _drawLabel(
-      canvas,
-      angle == SwingAngle.faceOn
-          ? 'Face camera  •  full body visible'
-          : 'Side-on to camera  •  target to your left',
-      Offset(w / 2, h * 0.93),
-      Colors.white.withOpacity(0.7),
-      11,
-    );
+    // ── Body silhouette (address position) ────────────────────────────────────
+    _drawSilhouette(canvas, w, h, silhouettePaint);
   }
 
-  void _drawSilhouette(Canvas canvas, Size size, Paint paint) {
-    final w = size.width;
-    final h = size.height;
-
-    final cx = w * 0.5; // centre x
+  /// Draws a golf-address stick-figure.
+  /// Vertically bounded: top at h*0.16, ankles at h*0.72 — clear of both overlays.
+  void _drawSilhouette(Canvas canvas, double w, double h, Paint p) {
+    final cx = w * 0.5;
 
     // Head
-    final headR = w * 0.048;
-    final headCy = h * 0.18;
-    canvas.drawCircle(Offset(cx, headCy), headR, paint);
+    final headR = w * 0.046;
+    final headCy = h * 0.21;
+    canvas.drawCircle(Offset(cx, headCy), headR, p);
 
-    // Neck + shoulders
-    final neckBottom = Offset(cx, headCy + headR + h * 0.02);
-    final lShoulder = Offset(cx - w * 0.10, headCy + headR + h * 0.05);
-    final rShoulder = Offset(cx + w * 0.10, headCy + headR + h * 0.05);
-    canvas.drawLine(neckBottom, lShoulder, paint);
-    canvas.drawLine(neckBottom, rShoulder, paint);
+    // Neck down to shoulder mid
+    final neckTop = Offset(cx, headCy + headR);
+    final neckBot = Offset(cx, headCy + headR + h * 0.025);
 
-    // Arms (hanging at address)
-    final lElbow = Offset(lShoulder.dx - w * 0.04, lShoulder.dy + h * 0.10);
-    final rElbow = Offset(rShoulder.dx + w * 0.04, rShoulder.dy + h * 0.10);
-    final lWrist = Offset(lElbow.dx - w * 0.02, lElbow.dy + h * 0.08);
-    final rWrist = Offset(rElbow.dx + w * 0.02, rElbow.dy + h * 0.08);
-    canvas.drawLine(lShoulder, lElbow, paint);
-    canvas.drawLine(lElbow, lWrist, paint);
-    canvas.drawLine(rShoulder, rElbow, paint);
-    canvas.drawLine(rElbow, rWrist, paint);
+    // Shoulders
+    final lS = Offset(cx - w * 0.105, neckBot.dy + h * 0.025);
+    final rS = Offset(cx + w * 0.105, neckBot.dy + h * 0.025);
+    canvas.drawLine(neckBot, lS, p);
+    canvas.drawLine(neckBot, rS, p);
 
-    // Torso
-    final hipMid = Offset(cx, h * 0.60);
-    canvas.drawLine(neckBottom, hipMid, paint);
+    // Arms — angled inward toward club grip at address
+    final lE = Offset(cx - w * 0.065, lS.dy + h * 0.095);
+    final rE = Offset(cx + w * 0.065, rS.dy + h * 0.095);
+    final lW = Offset(cx - w * 0.02, lE.dy + h * 0.075);
+    final rW = Offset(cx + w * 0.02, rE.dy + h * 0.075);
+    canvas.drawLine(lS, lE, p);
+    canvas.drawLine(lE, lW, p);
+    canvas.drawLine(rS, rE, p);
+    canvas.drawLine(rE, rW, p);
 
-    // Legs
-    final lHip = Offset(cx - w * 0.06, hipMid.dy);
-    final rHip = Offset(cx + w * 0.06, hipMid.dy);
-    final lKnee = Offset(lHip.dx, hipMid.dy + h * 0.12);
-    final rKnee = Offset(rHip.dx, hipMid.dy + h * 0.12);
-    final lAnkle = Offset(lHip.dx, hipMid.dy + h * 0.23);
-    final rAnkle = Offset(rHip.dx, hipMid.dy + h * 0.23);
-    canvas.drawLine(lHip, lKnee, paint);
-    canvas.drawLine(lKnee, lAnkle, paint);
-    canvas.drawLine(rHip, rKnee, paint);
-    canvas.drawLine(rKnee, rAnkle, paint);
+    // Torso — slight forward lean
+    final hipMid = Offset(cx + w * 0.012, h * 0.50);
+    canvas.drawLine(neckBot, hipMid, p);
+
+    // Hips
+    final lH = Offset(hipMid.dx - w * 0.065, hipMid.dy);
+    final rH = Offset(hipMid.dx + w * 0.065, hipMid.dy);
+
+    // Legs — slight knee flex at address
+    final lK = Offset(lH.dx - w * 0.01, lH.dy + h * 0.115);
+    final rK = Offset(rH.dx + w * 0.01, rH.dy + h * 0.115);
+    final lA = Offset(lH.dx - w * 0.008, lH.dy + h * 0.215);
+    final rA = Offset(rH.dx + w * 0.008, rH.dy + h * 0.215);
+    canvas.drawLine(lH, lK, p);
+    canvas.drawLine(lK, lA, p);
+    canvas.drawLine(rH, rK, p);
+    canvas.drawLine(rK, rA, p);
 
     // Feet
-    canvas.drawLine(lAnkle, Offset(lAnkle.dx - w * 0.06, lAnkle.dy), paint);
-    canvas.drawLine(rAnkle, Offset(rAnkle.dx + w * 0.06, rAnkle.dy), paint);
-
-    // Club (simple line downward from wrists)
-    final clubTop = Offset((lWrist.dx + rWrist.dx) / 2, (lWrist.dy + rWrist.dy) / 2);
-    final clubHead = Offset(clubTop.dx + w * 0.12, hipMid.dy + h * 0.26);
-    canvas.drawLine(clubTop, clubHead, paint);
+    canvas.drawLine(lA, Offset(lA.dx - w * 0.055, lA.dy), p);
+    canvas.drawLine(rA, Offset(rA.dx + w * 0.055, rA.dy), p);
   }
 
-  void _drawDashedLine(Canvas canvas, Offset a, Offset b, Paint paint) {
-    const dashLen = 10.0;
-    const gapLen = 6.0;
-    final total = math.sqrt(math.pow(b.dx - a.dx, 2) + math.pow(b.dy - a.dy, 2));
+  void _dash(Canvas canvas, Offset a, Offset b, Paint paint,
+      {double dashLen = 10, double gapLen = 6}) {
+    final dx = b.dx - a.dx, dy = b.dy - a.dy;
+    final total = math.sqrt(dx * dx + dy * dy);
     if (total == 0) return;
-    final dx = (b.dx - a.dx) / total;
-    final dy = (b.dy - a.dy) / total;
+    final nx = dx / total, ny = dy / total;
     double pos = 0;
-    bool drawing = true;
+    bool draw = true;
     while (pos < total) {
-      final len = drawing ? dashLen : gapLen;
-      final end = math.min(pos + len, total);
-      if (drawing) {
+      final segEnd = math.min(pos + (draw ? dashLen : gapLen), total);
+      if (draw) {
         canvas.drawLine(
-          Offset(a.dx + dx * pos, a.dy + dy * pos),
-          Offset(a.dx + dx * end, a.dy + dy * end),
+          Offset(a.dx + nx * pos, a.dy + ny * pos),
+          Offset(a.dx + nx * segEnd, a.dy + ny * segEnd),
           paint,
         );
       }
-      pos = end;
-      drawing = !drawing;
+      pos = segEnd;
+      draw = !draw;
     }
   }
 
-  void _drawLabel(Canvas canvas, String text, Offset center, Color color, double size) {
+  void _text(Canvas canvas, String text, Offset anchor, Color color,
+      double fontSize,
+      {TextAlign align = TextAlign.center}) {
     final tp = TextPainter(
       text: TextSpan(
         text: text,
         style: TextStyle(
           color: color,
-          fontSize: size,
-          fontWeight: FontWeight.w600,
-          letterSpacing: 0.5,
-          shadows: const [Shadow(color: Colors.black87, blurRadius: 4)],
+          fontSize: fontSize,
+          fontWeight: FontWeight.w500,
+          shadows: const [Shadow(color: Colors.black87, blurRadius: 3)],
         ),
       ),
       textDirection: TextDirection.ltr,
+      textAlign: align,
     )..layout();
-    tp.paint(canvas, Offset(center.dx - tp.width / 2, center.dy - tp.height / 2));
+    tp.paint(canvas, Offset(anchor.dx, anchor.dy - tp.height / 2));
   }
 
   @override
